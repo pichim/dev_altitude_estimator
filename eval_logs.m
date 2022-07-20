@@ -5,21 +5,33 @@ clc, clear variables
 % - samplingrate 50 Hz
 % - ind_repair must be set by hand (either 1:2:N or 2:2:N)
 
-is_matlab = true; % false -> octave
+is_matlab = false; % false -> octave
 do_plot_raw_signals = false;
-do_repair_signals = true;
+do_repair_signals   = false;
+do_use_baro = true; % false -> gps
 
-downsample_divider = 1; % 1..N
+downsample_divider = 1; % if > 1 gps and baro will be downsampled
 
 % 1/Ts/downsample_divider : 1/Ts/downsample_divider : 1/2/Ts
 
-load data_log_40802.mat
+% data = read_bin_data('measurements/20220714/log_40802.bin');
+% T_eval = [60 108]; % relative to data.ti
+% T_comp = [0 inf];  % relative to T_eval
+% data = read_bin_data('measurements/20220714/log_40803.bin');
+% T_eval = [1 inf]; % relative to data.ti
+% T_comp = [0 inf];  % relative to T_eval
+% data = read_bin_data('measurements/20220714/log_40805.bin');
+load data_log_40805.mat
+T_eval = [1 inf]; % relative to data.ti
+T_comp = [0 inf];  % relative to T_eval
+baro_offset = 0;
 
 if is_matlab
   addpath ../fcn_bib
 else
   pkg load control
   pkg load signal
+  pkg load communications
   addpath fcn_bib_copy
 end
 % data =
@@ -52,10 +64,8 @@ end
 
 %%
 
-T_eval = [8 261];
 Ts = 1/50;
 N = size(data.ti, 1);
-baro_offset = 443.9;
 
 ind_eval = data.ti >= T_eval(1) & data.ti < T_eval(2);
 
@@ -64,10 +74,18 @@ time = data.ti(ind_eval); time = time - time(1);
 acc = data.acc(ind_eval,:);
 est_rpy = data.est_RPY(ind_eval,:);
 est_xyz = data.est_xyz(ind_eval,:);
+est_Vxyz = data.est_Vxyz(ind_eval,:);
+est_z_2 = data.est_z_2(ind_eval,:) - baro_offset;
+est_Vz_2 = data.est_Vz_2(ind_eval,:);
+cntrl_FT = data.cntrl_FT(ind_eval,:);
 
-ind_repair = data.Lidar(:,4) > 0; % repair lidar and append as last coloumn
-lidar = interp1(data.ti(ind_repair), data.Lidar(ind_repair,3), data.ti, 'linear', 'extrap');
-lidar = lidar(ind_eval,:);
+if do_repair_signals
+    ind_repair = data.Lidar(:,4) > 0; % repair lidar and append as last coloumn
+    lidar = interp1(data.ti(ind_repair), data.Lidar(ind_repair,3), data.ti, 'linear', 'extrap');
+    lidar = lidar(ind_eval,:);
+else
+    lidar = data.Lidar(ind_eval,3);
+end
 
 if do_repair_signals
     ind_repair = 1:2:N;
@@ -182,64 +200,57 @@ A = [[0 1 0]; [0 0 -1]; [0 0 -wa]];
 B = [0 1 0].';
 C = [1 0 0];
 
-% % euler forward discretization, you need to use dlqr for a discrete time system
-% Ad = Ts*A + eye(size(A));
-% Bd = Ts*B;
-% Cd = eye(3);
-% % sysd = c2d(ss(A, B, eye(3), 0), Ts, 'tustin');
-% % Ad = sysd.a;
-% % Bd = sysd.b;
-% % Cd = sysd.c;
-
-% static kalman filter
-% Q = diag([1 1 1e0]);
-% R = 1e1;
+% % steady state time continous kalman filter
+% Q = diag([1 20 10]);
+% R = 0.1*5.0;
 % [K, S, e] = lqr(A.', C.', Q, R);
+% K = K.';
 
 %%
 
 % pole placement (easy analytical solution)
-% w1 <= w2, 0.6 <= D <= 1 (D = 1/2/Q)
-[b, a] = besself(3, 2*pi*0.16);
-roots_a = roots(a);
-% G = tf(b ,a);
-w1 = abs(roots_a(3));
-w2 = abs(roots_a(1)); D2 = cos(angle(-roots_a(1)));
-% w1 = 2*pi*0.1;
-% w2 = 2*pi*0.1; D2 = 1;
+% % bessel
+% w0 = 2*pi*0.2;
+% s1 = 0.941600026533207; % 0.149860298638220*2*pi;
+% s2 = 1.030544545438434; % 0.164016258482917*2*pi;
+% D2 = 0.723540179945206;
+% w1 = w0 * s1
+% w2 = w0 * s2
+% bf pt3
+w0 = 2*pi*0.2;
+D2 = 1.0;
+w1 = w0;
+w2 = w0;
+% % arbitary
+% w1 = 2*pi*0.1136;
+% w2 = 2*pi*0.3983; D2 = 0.7480;
 % K = place(A.', C.', [-w1, -w2*D2 + 1i*w2*sqrt(1 - D2^2), -w2*D2 - 1i*w2*sqrt(1 - D2^2)]).'
-% analytical solution from place
+% analytical solution for place
 k1 = (w1 + 2*D2*w2) - wa;
 k2 = (w2^2 + 2*D2*w1*w2) - k1*wa;
 k3 = k2*wa - w1*w2^2;
 K = [k1, k2, k3].';
 
-% choose the input and output signal
-% u = [acc(:,3) - 9.81, gps_pos(:,3)];
-u = [acc(:,3) - 9.81, baro];
+% choose the input and output signal, for the linear filter the bias is on acc_z in earth frame
+if do_use_baro
+    u = [acc_earth(:,3) - 9.81, baro];
+else
+    u = [acc_earth(:,3) - 9.81, gps_pos(:,3)];
+end
 
 % closed loop system
 sys = ss(A - K*C, [B, K], eye(3), 0);
 y = lsim(sys, u, time);
-
-% since we calculated K based on time continous model we need to scale it with Ts
-[y_est, acc_z_est] = altitude_estimator(K*Ts, wa, acc, u(:,2), quat, Ts);
 
 % the sum of these give the position and the velocity estimate
 sys_inp  = ss(A - K*C, B, C, 0);        % acts on acc
 sys_out  = ss(A - K*C, K, C, 0);        % acts on pos
 sys_dinp = ss(A - K*C, B, [0 1 0], 0);
 sys_dout = ss(A - K*C, K, [0 1 0], 0);
-% sys_inp  = ss(Ad - K*Ts*Cd(1,:), Bd  , Cd(1,:), 0, Ts); % acts on acc
-% sys_out  = ss(Ad - K*Ts*Cd(1,:), K*Ts, Cd(1,:), 0, Ts); % acts on pos
-% sys_dinp = ss(Ad - K*Ts*Cd(1,:), Bd  , Cd(2,:), 0, Ts);
-% sys_dout = ss(Ad - K*Ts*Cd(1,:), K*Ts, Cd(2,:), 0, Ts);
 
 s = tf('s');
-% s = tf([1 -1], [0 Ts], Ts);
-% % s = tf(2*[1 -1], Ts*[1 1], Ts);
 
-% the are the complementary parts (sum up to 1)
+% they are the complementary parts (sum up to 1)
 G_inp = minreal(tf(sys_inp));
 G_out = minreal(tf(sys_out));
 G_hp = G_inp * s * s;
@@ -252,60 +263,139 @@ G_lp = G_out;
 % G_inp = s * tf(1, [1/w1 1])* tf(w2^2, [1 2*D2*w2 w2^2]) /( w1 * w2^2); % G_hp / Gd / Gd;
 
 % this is exactly the same like y if wa = 0
-% G_inp = c2d(G_inp, Ts, 'tustin');
-% G_out = c2d(G_out, Ts, 'tustin');
-y_cf = lsim(G_inp, u(:,1), time) + lsim(G_out, u(:,2), time);
+y_cf = lsim(sys_inp, u(:,1), time) + lsim(sys_out, u(:,2), time);
+y_cf = [y_cf, lsim(sys_dinp, u(:,1), time) + lsim(sys_dout, u(:,2), time)];
 
 figure(13)
-bode(G_inp, G_out), grid on, xlim([1e-3 1/2/Ts])
-legend('filter for acc', 'filter for pos', 'location', 'best')
+bode(sys_inp, sys_out, sys_dinp, sys_dout), grid on%, xlim([1e-3 1/2/Ts])
+title('time continous filters')
+legend('filter for acc \rightarrow pos', 'filter for baro/gps \rightarrow pos', ...
+       'filter for acc \rightarrow vel', 'filter for baro/gps \rightarrow vel', 'location', 'northeast')
 
 figure(14)
-bode(G_hp, G_lp, G_hp + G_lp), grid on, xlim([1e-3 1/2/Ts])
-legend('highpass', 'lowpass', 'sum of both', 'location', 'best')
+title('time continous filters')
+bode(G_hp, G_lp, G_hp + G_lp), grid on%, xlim([1e-3 1/2/Ts])
+legend('highpass', 'lowpass', 'sum of both', 'location', 'northeast')
 
-Gf = c2d(tf(1, [1/(2*pi*2) 1]), Ts, 'tustin');
+Gf = c2d(tf(1, [1/(2*pi*4) 1]), Ts, 'tustin');
 dpos = diff(u(:,2)) ./ diff(time); dpos = [dpos; dpos(end)];
 dlidar = diff(lidar) ./ diff(time); dlidar = [dlidar; dlidar(end)];
 
-figure(15)
-plot(time, u(:,2), 'k'), grid on, hold on
-plot(time, y(:,1) - 0*y_cf(:,1), 'Linewidth', 2, 'color', [0 0 1])
-plot(time, y_est(:,1), 'Linewidth', 2, 'color', [0 0.5 0])
-plot(time, lidar, 'Linewidth', 2, 'color', [1 0 0]), hold off
-ylabel('Pos z (m)'), xlabel('Time (s)'), xlim([0 time(end)])
+% nd_pos corresponds to posDiscreteDelay
+nd_pos = 5;
+[y_est, acc_z_est] = altitude_estimator(K, nd_pos, wa, acc, u(:,2), quat, Ts);
+format long
+single(y_est(1:10,:))
+format short
 
-figure(16)
+% euler discretization
+Ad = Ts*A + eye(size(A));
+Bd = Ts*B;
+
+% % build the discrete time linear filter
+% z = tf('z', Ts);
+% sys_inpd  =  ss( C * (z*eye(3) - (Ad - K*Ts*C))^-1 * Bd );
+% sys_outd  =  ss( C * (z*eye(3) - (Ad - K*Ts*C))^-1 * K*Ts );
+% sys_dinpd =  ss( [0 1 0] * (z*eye(3) - (Ad - K*Ts*C))^-1 * Bd );
+% sys_doutd =  ss( [0 1 0] * (z*eye(3) - (Ad - K*Ts*C))^-1 * K*Ts );
+%
+% figure(15)
+% bode(sys_inpd, sys_outd, sys_dinpd, sys_doutd), grid on, xlim([1e-3 1/2/Ts])
+% legend('filter for acc \rightarrow pos', 'filter for baro/gps \rightarrow pos', ...
+%        'filter for acc \rightarrow vel', 'filter for baro/gps \rightarrow vel', 'location', 'northeast')
+
+% build the discrete time linear filter
+sys_inpd  = ss(Ad - K*Ts*C, Bd  , C, 0, Ts);
+sys_outd  = ss(Ad - K*Ts*C, K*Ts, C, 0, Ts);
+sys_dinpd = ss(Ad - K*Ts*C, Bd  , [0 1 0], 0, Ts);
+sys_doutd = ss(Ad - K*Ts*C, K*Ts, [0 1 0], 0, Ts);
+
+figure(15)
+bode(sys_inpd, sys_outd, sys_dinpd, sys_doutd), grid on%, xlim([1e-3 1/2/Ts])
+title('time discrete filters')
+legend('filter for acc \rightarrow pos', 'filter for baro/gps \rightarrow pos', ...
+       'filter for acc \rightarrow vel', 'filter for baro/gps \rightarrow vel', 'location', 'northeast')
+
+if is_matlab
+    % build the discrete time linear filter
+    [aa, bb, cc, dd] = dlinmod('altitude_estimator_G', Ts);
+    sysd = ss(aa, bb, cc, dd, Ts);
+
+    figure(16)
+    bode(sysd(1,1), sysd(1,2), sysd(2,1), sysd(2,2)), grid on%, xlim([1e-3 1/2/Ts])
+    title('time discrete filters with delay correction')
+    legend('filter for acc \rightarrow pos', 'filter for baro/gps \rightarrow pos', ...
+           'filter for acc \rightarrow vel', 'filter for baro/gps \rightarrow vel', 'location', 'northeast')
+end
+
+%%
+
+% sys = ss(tf(1, [1/(2*pi*1) 1]))
+% Ad = Ts*sys.a + eye(size(sys.a));
+% Bd = Ts*sys.b;
+%
+% sysd0 = ss(Ad, Bd, sys.c, sys.d, Ts);
+% Acld = z*eye(size(sys.a)) - Ad;
+% sysd1 = sys.c * inv(Acld) * Bd;
+%
+% figure(99)
+% bode(sys, sysd0, sysd1), grid on
+
+%%
+
+figure(17)
+plot(time, u(:,2), 'k'), grid on, hold on
+plot(time, y(:,1), 'Linewidth', 2, 'color', [0 0 1])
+plot(time, y_est(:,1), 'Linewidth', 2, 'color', [0 0.5 0])
+plot(time, y_cf(:,1), 'c', 'Linewidth', 2)
+plot(time, lidar, 'Linewidth', 2, 'color', [1 0 0])
+plot(time, est_xyz(:,3), 'm', 'Linewidth', 2)
+plot(time, est_z_2, 'Linewidth', 2, 'color', [0.6 0.6 0.6]), hold off
+ylabel('Pos z (m)'), xlabel('Time (s)'), xlim([0 time(end)])%, ylim([-1 7])
+
+figure(18)
 plot(time, filtfilt(Gf.num{1}, Gf.den{1}, dpos), 'k'), grid on, hold on
 plot(time, y(:,2), 'Linewidth', 2, 'color', [0 0 1])
 plot(time, y_est(:,2), 'Linewidth', 2, 'color', [0 0.5 0])
-plot(time, filtfilt(Gf.num{1}, Gf.den{1}, dlidar), 'Linewidth', 2, 'color', [1 0 0]), hold off
-ylabel('Vel z (m/s)'), xlabel('Time (s)'), xlim([0 time(end)])
+plot(time, y_cf(:,2), 'c', 'Linewidth', 2)
+plot(time, filtfilt(Gf.num{1}, Gf.den{1}, dlidar), 'Linewidth', 2, 'color', [1 0 0])
+plot(time, est_Vxyz(:,3), 'm', 'Linewidth', 2)
+plot(time, est_Vz_2, 'Linewidth', 2, 'color', [0.6 0.6 0.6]), hold off
+ylabel('Vel z (m/s)'), xlabel('Time (s)'), xlim([0 time(end)])%, ylim([-5 5])
 
-figure(17)
+figure(19)
 plot(time, [y(:,3), y_est(:,3)], 'Linewidth', 2), grid on, hold off
 ylabel('Acc Bias (m/s^2)'), xlabel('Time (s)'), xlim([0 time(end)])
 
-figure(18)
+figure(20)
 plot(time, acc_z_est, 'Linewidth', 2), grid on, xlim([0 time(end)])
+ylabel('Acc without Bias (m/s^2)'), xlabel('Time (s)'), xlim([0 time(end)])
 
-Nest     = round(2.5/Ts);
+%%
+
+ind_comp = T_comp(1) <= time & time <= T_comp(2);
+
+finddelay(y_est(ind_comp,1), est_xyz(ind_comp,3))
+
+Nest     = round(5/Ts);
 koverlap = 0.95;
 Noverlap = round(koverlap*Nest);
 window   = hann(Nest);
 delta    = 0;
-[G1, C1, freq] = my_tfestimate(acc_z_est(:,2), y_est(:,1), window, Noverlap, Nest, Ts, delta);
-[G2, C2, freq] = my_tfestimate(y_est(:,1), lidar, window, Noverlap, Nest, Ts, delta);
+[G1, C1, freq] = my_tfestimate(acc_z_est(ind_comp,1), y_est(ind_comp,1), window, Noverlap, Nest, Ts, delta);
+[G2, C2, freq] = my_tfestimate(y_est(ind_comp,1), est_xyz(ind_comp,3), window, Noverlap, Nest, Ts, delta);
 
-figure(19)
+figure(21)
 if is_matlab
   bode(G1, G2), grid on, xlim([G1.Frequency(2) 1/2/Ts])
 else
+  ind = G1.w > 0;
+  G = [squeeze(G1.H), squeeze(G2.H)];
   subplot(211)
-  loglog(2*pi*G1.w, abs(squeeze([G1.H, G2.H]))), grid on
+  loglog(G1.w(ind), abs(G(ind,:))), grid on
   ylabel('Magnitude (abs)')
   subplot(212)
-  semilogx(2*pi*G1.w, 180/pi*angle(squeeze([G1.H, G2.H]))), grid on
+  semilogx(G1.w(ind), 180/pi*angle(G(ind,:))), grid on
   ylabel('Phase (deg)')
 end
 
@@ -314,23 +404,44 @@ end
 % Noverlap = round(koverlap*Nest);
 % window   = ones(Nest, 1); % hann(Nest);
 % data_spectras = y_est(:,1);
-% % [pxx, f] = pwelch(data_spectras, window, Noverlap, 1/Ts, 'Power');
+% [pxx, f] = pwelch(data_spectras, window, Noverlap, 1/Ts, 'Power');
 % [pxx, f] = pwelch(data_spectras, window, Noverlap, Nest, 1/Ts, 'Power');
 % spectras = sqrt(pxx*2); % power -> amplitude (dc needs to be scaled differently)
-[Y_est, f] = myfft(y_est(:,1), Ts);
-[Y_cf, f]  = myfft(y_cf, Ts);
-[A, f]     = myfft(acc_z_est(:,1), Ts);
-[A_f, f]   = myfft(acc_z_est(:,2), Ts);
+[P_est, f]   = my_fft(y_est(:,1), Ts);
+[P_cf, f]    = my_fft(y_cf(:,1), Ts);
+[Vel_est, f] = my_fft(y_est(:,2), Ts);
+[Acc_est, f] = my_fft(acc_z_est, Ts);
+ind = f > 0;
 
-figure(20)
-subplot(211)
-plot(f, [Y_est, Y_cf]), grid on, xlabel('Frequency (Hz)')
+figure(22)
+subplot(311)
+plot(f(ind), [P_est(ind), P_cf(ind)]), grid on, xlabel('Frequency (Hz)')
 set(gca, 'XScale', 'log'), set(gca, 'YScale', 'log')
-subplot(212)
-plot(f, [A, A_f]), grid on, xlabel('Frequency (Hz)')
+subplot(312)
+plot(f(ind), Vel_est(ind)), grid on, xlabel('Frequency (Hz)')
+set(gca, 'XScale', 'log'), set(gca, 'YScale', 'log')
+subplot(313)
+plot(f(ind), Acc_est(ind)), grid on, xlabel('Frequency (Hz)')
 set(gca, 'XScale', 'log'), set(gca, 'YScale', 'log')
 
-%% some symbolic stuff to calculate the pole placemant K
+%% convert pi-d to p-pi
+
+% clc, clear all
+% syms kp ki kd Kv P I
+% eqns = [kp == Kv*P + I, ki == Kv*I, kd == P];
+% vars = [Kv, P, I];
+% sol = solve(eqns, vars)
+% % sol.Kv
+% (kp/2 + (kp^2 - 4*kd*ki)^(1/2)/2)/kd
+% (kp/2 - (kp^2 - 4*kd*ki)^(1/2)/2)/kd
+% % sol.P
+% kd
+% kd
+% % sol.I
+% kp/2 - (kp^2 - 4*kd*ki)^(1/2)/2
+% kp/2 + (kp^2 - 4*kd*ki)^(1/2)/2
+
+%% pole placemant K
 
 % clc, clear all
 % syms  wa k1 k2 k3 s w1 w2 D2
