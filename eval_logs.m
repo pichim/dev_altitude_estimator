@@ -5,7 +5,7 @@ clc, clear variables
 % - samplingrate 50 Hz
 % - ind_repair must be set by hand (either 1:2:N or 2:2:N)
 
-is_matlab = false; % false -> octave
+is_matlab = false;  % false -> octave
 do_plot_raw_signals = false;
 do_repair_signals   = false;
 do_use_baro = true; % false -> gps
@@ -208,6 +208,8 @@ C = [1 0 0];
 
 %%
 
+% prewarp: w0 = 2/Ts*tan(w0*Ts/2);
+
 % pole placement (easy analytical solution)
 % % bessel
 % w0 = 2*pi*0.2;
@@ -221,7 +223,7 @@ w0 = 2*pi*0.2;
 D2 = 1.0;
 w1 = w0;
 w2 = w0;
-% % arbitary
+% % arbitary (w1, w2, D2)
 % w1 = 2*pi*0.1136;
 % w2 = 2*pi*0.3983; D2 = 0.7480;
 % K = place(A.', C.', [-w1, -w2*D2 + 1i*w2*sqrt(1 - D2^2), -w2*D2 - 1i*w2*sqrt(1 - D2^2)]).'
@@ -230,6 +232,17 @@ k1 = (w1 + 2*D2*w2) - wa;
 k2 = (w2^2 + 2*D2*w1*w2) - k1*wa;
 k3 = k2*wa - w1*w2^2;
 K = [k1, k2, k3].';
+
+% % arbitary (w1, w2, w3)
+% w1 = 2*pi*0.05;
+% w2 = 2*pi*0.1;
+% w3 = 2*pi*0.2;
+% % K = place(A.', C.', [-w1, -w2, -w3]).'
+% % analytical solution for place
+% k1 = w1 + w2 + w3 - wa;
+% k2 = (w1*w2 + w1*w3 + w2*w3) - k1*wa;
+% k3 = k2*wa - w1*w2*w3;
+% K = [k1, k2, k3].';
 
 % choose the input and output signal, for the linear filter the bias is on acc_z in earth frame
 if do_use_baro
@@ -256,11 +269,26 @@ G_out = minreal(tf(sys_out));
 G_hp = G_inp * s * s;
 G_lp = G_out;
 
+G_dinp = minreal(tf(sys_dinp));
+G_dout = minreal(tf(sys_dout));
+G_dhp = G_inp * s;
+G_dlp = G_out / s;
+
 % % reconstructing those is a pain, these only hold if wa = 0
-% G_hp = s^3 * tf(1, [1/w1 1])* tf(w2^2, [1 2*D2*w2 w2^2]) /( w1 * w2^2);
-% G_lp = 1 - G_hp;
-% G_out = G_lp;
-% G_inp = s * tf(1, [1/w1 1])* tf(w2^2, [1 2*D2*w2 w2^2]) /( w1 * w2^2); % G_hp / Gd / Gd;
+% tau = 1/(2*pi*0.3);
+% G_hp_ = tf([tau^3 0 0 0], conv([tau 1], conv([tau 1], [tau 1])));
+% G_lp_ = 1 - G_hp_;
+% ---
+% G_hp_ = s^3 * tf(1, [1/w1 1])* tf(w2^2, [1 2*D2*w2 w2^2]) /( w1 * w2^2);
+% G_lp_ = 1 - G_hp_;
+% G_out_ = G_lp_;
+% G_inp_ = s * tf(1, [1/w1 1])* tf(w2^2, [1 2*D2*w2 w2^2]) /( w1 * w2^2); % G_hp_ / Gd / Gd;
+% ---
+% w = w1;
+% G_lp_ = tf(1, [1/w 1]) * tf(1, [1/w 1]) * tf(1, [1/w 1]);
+% G_hp_ =  tf([1/w 0], [1/w 1]) * tf([1/w 0], [1/w 1]) * tf([1/w 0], [1/w 1]);
+% G_lp_ = tf(1, [1/w1 1]) * tf(w2^2, [1 2*D2*w2  w2^2]);
+% G_hp_ =  s^3 * tf(1, [1/w1 1])* tf(w2^2, [1 2*D2*w2 w2^2]) /( w1 * w2^2);
 
 % this is exactly the same like y if wa = 0
 y_cf = lsim(sys_inp, u(:,1), time) + lsim(sys_out, u(:,2), time);
@@ -277,6 +305,13 @@ title('time continous filters')
 bode(G_hp, G_lp, G_hp + G_lp), grid on%, xlim([1e-3 1/2/Ts])
 legend('highpass', 'lowpass', 'sum of both', 'location', 'northeast')
 
+figure(15)
+title('time continous filters')
+bode(G_dhp, G_dlp, G_dhp + G_dlp), grid on%, xlim([1e-3 1/2/Ts])
+legend('highpass', 'lowpass', 'sum of both', 'location', 'northeast')
+
+%
+
 Gf = c2d(tf(1, [1/(2*pi*4) 1]), Ts, 'tustin');
 dpos = diff(u(:,2)) ./ diff(time); dpos = [dpos; dpos(end)];
 dlidar = diff(lidar) ./ diff(time); dlidar = [dlidar; dlidar(end)];
@@ -288,29 +323,31 @@ format long
 single(y_est(1:10,:))
 format short
 
-% euler discretization
-Ad = Ts*A + eye(size(A));
-Bd = Ts*B;
+% % euler discretization
+% Ad = Ts*A + eye(size(A));
+% Bd = Ts*B;
+% Cd = eye(3);
+% Dd = zeros(3,1);
 
-% % build the discrete time linear filter
-% z = tf('z', Ts);
-% sys_inpd  =  ss( C * (z*eye(3) - (Ad - K*Ts*C))^-1 * Bd );
-% sys_outd  =  ss( C * (z*eye(3) - (Ad - K*Ts*C))^-1 * K*Ts );
-% sys_dinpd =  ss( [0 1 0] * (z*eye(3) - (Ad - K*Ts*C))^-1 * Bd );
-% sys_doutd =  ss( [0 1 0] * (z*eye(3) - (Ad - K*Ts*C))^-1 * K*Ts );
-%
-% figure(15)
-% bode(sys_inpd, sys_outd, sys_dinpd, sys_doutd), grid on, xlim([1e-3 1/2/Ts])
-% legend('filter for acc \rightarrow pos', 'filter for baro/gps \rightarrow pos', ...
-%        'filter for acc \rightarrow vel', 'filter for baro/gps \rightarrow vel', 'location', 'northeast')
+% tustin
+Ad = [[1 Ts -Ts^2/2]; ...
+      [0 1  -Ts    ];...
+      [0 0   1     ]];
+Bd = [Ts^2/2, Ts, 0].';
+% Cd = [[1 Ts/2 -Ts^2/4]; ...
+%       [0 1    -Ts/2  ]; ...
+%       [0 0     1]];
+% Dd = [Ts^2/4, Ts/2, 0].';
+Cd = eye(3);
+Dd = zeros(3,1);
 
 % build the discrete time linear filter
-sys_inpd  = ss(Ad - K*Ts*C, Bd  , C, 0, Ts);
-sys_outd  = ss(Ad - K*Ts*C, K*Ts, C, 0, Ts);
-sys_dinpd = ss(Ad - K*Ts*C, Bd  , [0 1 0], 0, Ts);
-sys_doutd = ss(Ad - K*Ts*C, K*Ts, [0 1 0], 0, Ts);
+sys_inpd  = ss(Ad - K*Ts*Cd(1,:), Bd - K*Ts*Dd(1,1), Cd(1,:), Dd(1,1), Ts);
+sys_outd  = ss(Ad - K*Ts*Cd(1,:), K*Ts             , Cd(1,:), Dd(1,1), Ts);
+sys_dinpd = ss(Ad - K*Ts*Cd(1,:), Bd - K*Ts*Dd(1,1), Cd(2,:), Dd(2,1), Ts);
+sys_doutd = ss(Ad - K*Ts*Cd(1,:), K*Ts             , Cd(2,:), Dd(2,1), Ts);
 
-figure(15)
+figure(16)
 bode(sys_inpd, sys_outd, sys_dinpd, sys_doutd), grid on%, xlim([1e-3 1/2/Ts])
 title('time discrete filters')
 legend('filter for acc \rightarrow pos', 'filter for baro/gps \rightarrow pos', ...
@@ -321,7 +358,7 @@ if is_matlab
     [aa, bb, cc, dd] = dlinmod('altitude_estimator_G', Ts);
     sysd = ss(aa, bb, cc, dd, Ts);
 
-    figure(16)
+    figure(17)
     bode(sysd(1,1), sysd(1,2), sysd(2,1), sysd(2,2)), grid on%, xlim([1e-3 1/2/Ts])
     title('time discrete filters with delay correction')
     legend('filter for acc \rightarrow pos', 'filter for baro/gps \rightarrow pos', ...
@@ -330,20 +367,7 @@ end
 
 %%
 
-% sys = ss(tf(1, [1/(2*pi*1) 1]))
-% Ad = Ts*sys.a + eye(size(sys.a));
-% Bd = Ts*sys.b;
-%
-% sysd0 = ss(Ad, Bd, sys.c, sys.d, Ts);
-% Acld = z*eye(size(sys.a)) - Ad;
-% sysd1 = sys.c * inv(Acld) * Bd;
-%
-% figure(99)
-% bode(sys, sysd0, sysd1), grid on
-
-%%
-
-figure(17)
+figure(18)
 plot(time, u(:,2), 'k'), grid on, hold on
 plot(time, y(:,1), 'Linewidth', 2, 'color', [0 0 1])
 plot(time, y_est(:,1), 'Linewidth', 2, 'color', [0 0.5 0])
@@ -353,7 +377,7 @@ plot(time, est_xyz(:,3), 'm', 'Linewidth', 2)
 plot(time, est_z_2, 'Linewidth', 2, 'color', [0.6 0.6 0.6]), hold off
 ylabel('Pos z (m)'), xlabel('Time (s)'), xlim([0 time(end)])%, ylim([-1 7])
 
-figure(18)
+figure(19)
 plot(time, filtfilt(Gf.num{1}, Gf.den{1}, dpos), 'k'), grid on, hold on
 plot(time, y(:,2), 'Linewidth', 2, 'color', [0 0 1])
 plot(time, y_est(:,2), 'Linewidth', 2, 'color', [0 0.5 0])
@@ -363,11 +387,11 @@ plot(time, est_Vxyz(:,3), 'm', 'Linewidth', 2)
 plot(time, est_Vz_2, 'Linewidth', 2, 'color', [0.6 0.6 0.6]), hold off
 ylabel('Vel z (m/s)'), xlabel('Time (s)'), xlim([0 time(end)])%, ylim([-5 5])
 
-figure(19)
+figure(20)
 plot(time, [y(:,3), y_est(:,3)], 'Linewidth', 2), grid on, hold off
 ylabel('Acc Bias (m/s^2)'), xlabel('Time (s)'), xlim([0 time(end)])
 
-figure(20)
+figure(21)
 plot(time, acc_z_est, 'Linewidth', 2), grid on, xlim([0 time(end)])
 ylabel('Acc without Bias (m/s^2)'), xlabel('Time (s)'), xlim([0 time(end)])
 
@@ -444,7 +468,7 @@ set(gca, 'XScale', 'log'), set(gca, 'YScale', 'log')
 %% pole placemant K
 
 % clc, clear all
-% syms  wa k1 k2 k3 s w1 w2 D2
+% syms  wa k1 k2 k3 s w1 w2 D2 w3
 % A = [[0 1 0]; [0 0 -1]; [0 0 -wa]]
 % C = [1 0 0]
 % K = [k1; k2; k3]
@@ -453,3 +477,13 @@ set(gca, 'XScale', 'log'), set(gca, 'YScale', 'log')
 %
 % collect(w1*(1/w1*s + 1)*(s^2 + 2*D2*w2*s + w2^2), 's')
 % % -> s^3 + (w1 + 2*D2*w2)*s^2 + (w2^2 + 2*D2*w1*w2)*s + w1*w2^2
+%
+% collect((w1*w2*w3)*(1/w1*s + 1)*(1/w2*s + 1)*(1/w3*s + 1), 's')
+% % -> s^3 + (w1 + w2 + w3)*s^2 + (w1*w2 + w1*w3 + w2*w3)*s + w1*w2*w3
+
+%%
+
+% clc, clear all
+% syms w1 w2 w3 s
+% f = (w1 + w2 + w3)*s^2 + (w1*w2 + w1*w3 + w2*w3)*s + w1*w2*w3
+% sol = simplify(solve(f, s))
