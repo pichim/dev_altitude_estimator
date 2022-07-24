@@ -5,7 +5,7 @@ clc, clear variables
 % - samplingrate 50 Hz
 % - ind_repair must be set by hand (either 1:2:N or 2:2:N)
 
-is_matlab = false;  % false -> octave
+is_matlab = true;  % false -> octave
 do_plot_raw_signals = false;
 do_repair_signals   = false;
 do_use_baro = true; % false -> gps
@@ -23,7 +23,7 @@ downsample_divider = 1; % if > 1 gps and baro will be downsampled
 % data = read_bin_data('measurements/20220714/log_40805.bin');
 load data_log_40805.mat
 T_eval = [1 inf]; % relative to data.ti
-T_comp = [0 inf];  % relative to T_eval
+T_comp = [0 inf]; % relative to T_eval
 baro_offset = 0;
 
 if is_matlab
@@ -195,7 +195,7 @@ end
 %%
 
 % time continous model
-wa = 0*2*pi*0.02; % set this zero to get integrator for bias
+wa = 0*2*pi*0.01; % set this zero to get integrator for bias
 A = [[0 1 0]; [0 0 -1]; [0 0 -wa]];
 B = [0 1 0].';
 C = [1 0 0];
@@ -317,7 +317,7 @@ dpos = diff(u(:,2)) ./ diff(time); dpos = [dpos; dpos(end)];
 dlidar = diff(lidar) ./ diff(time); dlidar = [dlidar; dlidar(end)];
 
 % nd_pos corresponds to posDiscreteDelay
-nd_pos = 5;
+nd_pos = 0;
 [y_est, acc_z_est] = altitude_estimator(K, nd_pos, wa, acc, u(:,2), quat, Ts);
 format long
 single(y_est(1:10,:))
