@@ -1,7 +1,7 @@
 clc, clear all
 %%
 
-is_matlab = true;  % false -> octave
+is_matlab = false;  % false -> octave
 
 if is_matlab
   addpath ../fcn_bib
@@ -11,10 +11,10 @@ else
 end
 
 Ts = 1/40;
-downsample_divider = 4;
+downsample_divider = 8;
 
 % create a similar function like ctzsnooze
-N = 50*downsample_divider;
+N = 200;
 time = (0:N-1).' *Ts;
 alt = -cos(2*pi*0.3*5*time) + 0.3;
 alt = cumtrapz(time, alt);
@@ -42,20 +42,24 @@ end
 % add noise and/or offset
 apply_offset = 1;
 apply_noise = 0;
-baro_offset = apply_offset * ones(N,1);
+baro_offset = apply_offset * 1.0*ones(N,1);
 baro_noise = apply_noise * cumtrapz(time, sqrt(0.1) * randn(N,1));
 baro_alt = baro_alt + baro_offset + baro_noise;
+gps_offset = apply_offset * 0.5*ones(N,1);
 gps_noise = apply_noise * cumtrapz(time, sqrt(0.1) * randn(N,1));
-gps_alt = gps_alt + gps_noise;
+gps_alt = gps_alt + gps_offset + gps_noise;
 
 % fuse the data accoring to the trust values, this will be the dc
 gps_trust = 0.5;
 alt_dc_fused = gps_trust * gps_alt + (1 - gps_trust) * baro_alt;
 
 % fuse the dc with a complementary filter and baro
-f_cut = 1.5; % Hz
-Gpt3 = tf(get_filter('pt3', f_cut, Ts));
-alt_fused = filter(Gpt3.num{1}, Gpt3.den{1}, alt_dc_fused) + baro_alt - filter(Gpt3.num{1}, Gpt3.den{1}, baro_alt);
+f_cut = 1.0; % Hz
+Gf = tf(get_filter('pt3', f_cut, Ts));
+alt_fused = filter(Gf.num{1}, Gf.den{1}, alt_dc_fused) + baro_alt - filter(Gf.num{1}, Gf.den{1}, baro_alt);
+
+offset_fused = gps_trust * gps_offset + (1 - gps_trust) * baro_offset;
+correct_offset_for_figure = 1;
 
 lw = 1.2;
 
@@ -67,7 +71,8 @@ legend('ideal altitude', 'baro alt', 'gps alt', 'alt dc fused', 'location', 'nor
 
 figure(2)
 plot(time, alt, 'LineWidth', lw), grid on, hold on
-stairs(time, [alt_dc_fused, alt_fused], 'LineWidth', lw), hold off
+stairs(time, [alt_dc_fused, alt_fused] - ...
+    correct_offset_for_figure * offset_fused, 'LineWidth', lw), hold off
 xlabel('Time (sec)'), ylabel('Altitude (m)'), xlim([0 time(end)])
 legend('ideal altitude', 'alt dc fused', 'alt fused', 'location', 'northwest')
 
@@ -82,7 +87,36 @@ xlabel('Time (sec)'), ylabel('d2/dt2 Altitude (m2/s2)'), xlim([0 time(end)])
 legend('ideal altitude', 'alt dc fused', 'alt fused', 'location', 'northwest')
 
 figure(4)
-subplot(121)
-bode(Gpt3, 1 - Gpt3, 2*pi*logspace(-2, log10(1/2/Ts), 2e3)), grid on
-subplot(122)
-step(Gpt3, 1- Gpt3, 4), grid on
+bode(Gf, 1 - Gf, 2*pi*logspace(-2, log10(1/2/Ts), 2e3)), grid on
+
+figure(5)
+step(Gf, 1- Gf, 2), grid on
+
+%%
+
+% f_cut_ = 0.5;
+% % Glp = tf(1, [1/(2*pi*f_cut_) 1]) * tf(1, [1/(2*pi*f_cut_) 1]) * tf(1, [1/(2*pi*f_cut_) 1]);
+% Glp = tf(get_filter('pt3', f_cut, Ts));
+% Ghp = 1 - Glp;
+%
+% scale = 0.5;
+% Ghp1 = 1 - tf(get_filter('pt2', f_cut*scale, Ts));
+% Ghp_ = (1 - tf(get_filter('pt2', f_cut*scale, Ts))) * Ghp1 * Ghp1;
+% Glp_ = 1 - Ghp_;
+%
+% % Blp = Glp.num{1}
+% % Alp = Glp.den{1}
+% % Bhp = Ghp.num{1}
+% % Ahp = Ghp.den{1}
+% %
+% % Ghp_ = tf([1 0 0 0], Ahp) * Ahp(1);
+% % Glp_ = 1 - Ghp_;
+%
+% figure(5)
+% subplot(121)
+% bode(Glp, Ghp, Glp_, Ghp_, 2*pi*logspace(-2, log10(1/2/Ts), 2e3)), grid on
+% subplot(122)
+% step(Glp, Ghp, Glp_, Ghp_, 4), grid on
+%
+% figure(6)
+% bode(Glp + Ghp, Glp_ + Ghp_, 2*pi*logspace(-2, log10(1/2/Ts), 2e3)), grid on
