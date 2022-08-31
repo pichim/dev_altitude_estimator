@@ -53,7 +53,7 @@ switch filter_type
             f_cut = f_cut*orderCutoffCorrection;
         end
         RC = 1/(2*pi*f_cut);
-        k  = Ts/(RC + Ts);
+        k  = Ts/(RC + Ts)
         G = tf([k^3 0 0 0], [1 3*(k-1) 3*(k-1)^2 (k-1)^3], Ts);
     case 'biquad'
         % 2nd order Butterworth (with Q=1/sqrt(2)) / Butterworth biquad section with Q

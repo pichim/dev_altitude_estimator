@@ -1,13 +1,10 @@
 clc, clear all
 %%
 
-is_matlab = false;  % false -> octave
-
-if is_matlab
+try
   addpath ../fcn_bib
-else
+catch
   addpath fcn_bib_copy
-  pkg load control
 end
 
 Ts = 1/40;
