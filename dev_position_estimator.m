@@ -7,10 +7,10 @@ catch
   addpath fcn_bib_copy
 end
 
-Ts = 1/120;
-f_cut = 0.16;
-wa = 2*pi*0.05; % this will be beneficial for horizontal position estimates (x-y)
-nd_pos = 9;     % this is somewhat a hack and can lead to a unstable filter
+Ts = 1/50;
+f_cut = 0.1;
+wa = 0 * 2*pi*0.01; % this will be beneficial for horizontal position estimates (x-y)
+nd_pos = 3;         % this is somewhat a hack and can lead to a unstable filter
 
 Gint = tf([Ts 0], [1 -1], Ts);
 
@@ -80,13 +80,17 @@ a32 = -Ts*k3;
 G = [[1, a12,   0, Ts*a12, k1]
      [0, a22,   0, Ts*a22, k2]
      [0, a32, a33, Ts*a32, k3]];
+ 
+format long
+G
+format short
 
-sys_lin = ss(Ad - K*Ad(1,:), [Bd - K*Bd(1,:), K], ...
-             Ad - K*Ad(1,:), [Bd - K*Bd(1,:), K], Ts);
-
-% this is the same like above only if nd_pos = 0
-[aa, bb, cc, dd] = dlinmod('position_estimator_G');
-sys = ss(aa, bb, cc, dd, Ts);
+sys = ss(Ad - K*Ad(1,:), [Bd - K*Bd(1,:), K], ...
+         Ad - K*Ad(1,:), [Bd - K*Bd(1,:), K], Ts);
+         
+% % this is the same like above only if nd_pos = 0
+% [aa, bb, cc, dd] = dlinmod('position_estimator_G');
+% sys = ss(aa, bb, cc, dd, Ts);
 
 % they are the complementary parts (sum up to 1)
 G_inp = sys(1,1);
@@ -104,25 +108,65 @@ G_ddout = sys(3,2);
 G_ddhp = G_ddinp;
 G_ddlp = G_ddout * Gint * Gint;
 
-figure(11)
+figure(1)
 bode(G_hp, G_lp, G_hp + G_lp, opt), grid on
 
-figure(22)
+figure(2)
 bode(G_dhp, G_dlp, G_dhp + G_dlp, opt), grid on
 
-figure(33)
+figure(3)
 bode(G_ddhp, G_ddlp, G_ddhp + G_ddlp, opt), grid on
 
-figure(44)
-bode(sys(1,1), sys(1,2), sys(2,1), sys(2,2), sys(3,1), sys(3,2), opt), grid on
+figure(4)
+bode(sys(1,1), sys(1,2), sys(2,1), sys(2,2), 0*sys(3,1), 0*sys(3,2), opt), grid on
 
-figure(55)
+figure(5)
 subplot(121)
 step(sys(1,1), sys(1,2), 10), grid on
 subplot(122)
 step(sys(2,1), 'r', sys(2,2), 'c', 10), grid on
 
 damp(sys(1,1))
+
+%%
+
+G = get_filter('pt1', f_cut, Ts);
+
+% this is the same like above created with pt1's only
+G_dhp2 = (1 - G) * (1 - G)
+G_hp2  = G_dhp2 * (1 - G);
+G_lp2  = (1 - G_hp2);
+G_dhp2 = G_dhp2 * (1 + 2*G);
+G_dlp2 = (1 - G_dhp2);
+
+% % this is not the same but simpler
+% G_dhp2 = (1 - G) * (1 - G);
+% G_dlp2 = (1 - G_dhp2);
+% G_hp2  = G_dhp2 * (1 - G);
+% G_lp2  = (1 - G_hp2);
+
+figure(6)
+bode(G_hp2, G_lp2, G_hp2 + G_lp2, opt), grid on
+
+figure(7)
+bode(G_dhp2*Gint, G_dlp2*Gint, (G_dhp2 + G_dlp2)*Gint, opt), grid on
+
+Gacc2vel = G_dhp2 * Gint;
+Gpos2vel = G_dlp2 / Gint;
+
+Gacc2pos = G_hp2 * Gint * Gint;
+Gpos2pos = G_lp2;
+
+figure(8)
+bode(Gacc2pos, Gpos2pos, Gacc2vel, Gpos2vel, opt), grid on
+
+figure(9)
+subplot(121)
+step(Gacc2pos, Gpos2pos, 10), grid on
+subplot(122)
+step(Gacc2vel, 'r', Gpos2vel, 'c', 10), grid on
+
+damp(G_lp2)
 
 %%
 

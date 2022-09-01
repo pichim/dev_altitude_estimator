@@ -1,4 +1,4 @@
-function [x_ret, acc_z_ret] = position_estimator(Ts, G, nd_pos, x0, acc, pos, quat)
+function [x_ret, acc_z_ret] = position_estimator(G, nd_pos, x0, acc, pos, quat)
 
 N = size(acc, 1);
 x = x0;

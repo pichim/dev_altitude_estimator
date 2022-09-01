@@ -104,7 +104,7 @@ alt_f1 = alt_raw;
 %     end
 % end
 
-f_cut = 15.0;
+f_cut = 2.0;
 [G, B, A] = get_filter('pt2', f_cut, Ts_baro);
 alt_f1 = filter(B, A, alt_f1);
 

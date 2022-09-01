@@ -37,13 +37,13 @@ baro_offset = -0.55;
 
 % data = read_bin_data('measurements/20220714/log_40802.bin');
 % T_eval = [60 108]; % relative to data.ti
-% T_comp = [0 inf]; % relative to T_eval
+% T_comp = [0 inf];  % relative to T_eval
 % baro_offset = 0;
 
-% % data = read_bin_data('measurements/20220714/log_40803.bin');
-% % T_eval = [1 inf]; % relative to data.ti
-% % T_comp = [0 inf]; % relative to T_eval
-% % baro_offset = 0;
+% data = read_bin_data('measurements/20220714/log_40803.bin');
+% T_eval = [1 inf]; % relative to data.ti
+% T_comp = [0 inf]; % relative to T_eval
+% baro_offset = 0;
 
 % data = read_bin_data('measurements/20220714/log_40805.bin');
 % T_eval = [1 inf]; % relative to data.ti
@@ -86,7 +86,9 @@ N = size(data.ti, 1);
 ind_eval = data.ti >= T_eval(1) & data.ti < T_eval(2);
 
 % extract data so that we are independent from naming above
-time = data.ti(ind_eval); time = time - time(1);
+% time = data.ti(ind_eval); time = time - time(1);
+time = (0:N-1).' * Ts;
+time = time(ind_eval); time = time - time(1);
 
 % data.acc(:,3) = data.acc(:,3) + 5;
 
@@ -216,8 +218,8 @@ end
 %%
 
 f_cut = 0.1;
-wa = 2*pi*0.01; % this will be beneficial for horizontal position estimates (x-y)
-nd_pos = 3;      % this is somewhat a hack and can lead to a unstable filter
+wa = 0 * 2*pi*0.01; % this will be beneficial for horizontal position estimates (x-y)
+nd_pos = 3;         % this is somewhat a hack and can lead to a unstable filter
 
 % choose the input and output signal, for the linear filter the bias is on acc_z in earth frame
 if do_use_baro
@@ -226,7 +228,7 @@ else
     u = [acc_earth(:,3) - 9.81, gps_pos(:,3)];
 end
 
-%%
+%
 
 k  = Ts/(1/(2*pi*f_cut) + Ts);
 
@@ -265,15 +267,16 @@ sys_lin = ss(Ad - K*Ad(1,:), [Bd - K*Bd(1,:), K], ...
              Ad - K*Ad(1,:), [Bd - K*Bd(1,:), K], Ts);
 
 % apply some betaflight filtering here
-[~, B, A] = get_filter('pt2', 15.0, Ts/3);
+[~, B, A] = get_filter('pt2', 6.0, Ts/3);
 acc_f = zeros(3*N, 3);
 u_f   = zeros(3*N, 2);
 for i = 1:N
     acc_f((i-1)*3+1:i*3,:) = acc(i,:) .* ones(3,3);
     u_f  ((i-1)*3+1:i*3,:) = u  (i,:) .* ones(3,2);
 end
-acc_f = filter(B, A, acc_f);
-u_f   = filter(B, A, u_f  );
+% acc_f = filter(B, A, acc_f);
+% u_f   = filter(B, A, u_f  );
+u_f(:,2) = filter(B, A, u_f(:,2));
 acc_f = acc_f(1:3:end,:);
 u_f   = u_f  (1:3:end,:);
          
@@ -285,14 +288,16 @@ sys = ss(aa, bb, cc, dd, Ts);
 x0 = [0; 0; 0*9.81];
 y_est = lsim(sys, u_f, time, [x0; zeros(nd_pos, 1)]);
 
-
-[y_est_nl, acc_z_est] = position_estimator(Ts, G, nd_pos, x0, acc_f, u_f(:,2), quat);
+% G = [1, 0.0192646, 0, 0.000385292, 0.0367711       
+%      0, 0.999542, 0, 0.0199908, 0.022912
+%      0, 9.53674e-05, 1, 1.90735e-06, -0.00476837];
+[y_est_nl, acc_z_est] = position_estimator(G, nd_pos, x0, acc_f, u_f(:,2), quat);
 format long
 G
 single(y_est_nl(1:10,:))
 format short
 
-%%
+%
 
 figure(1)
 plot(time, u(:,2), 'k'), grid on, hold on
@@ -324,7 +329,7 @@ figure(4)
 plot(time, acc_z_est, 'Linewidth', 2), grid on, xlim([0 time(end)])
 ylabel('Acc without Bias (m/s^2)'), xlabel('Time (s)'), xlim([0 time(end)])
 
-%%
+%
 
 ind_comp = T_comp(1) <= time & time <= T_comp(2);
 
