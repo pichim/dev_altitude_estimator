@@ -1,17 +1,36 @@
-function [x_ret, acc_z_ret] = position_estimator(G, nd_pos, x0, acc, pos, quat)
+function [x_ret, acc_z_ret] = position_estimator(f_cut, f_a, Ts, nd_pos, acc, pos, quat)
 
 N = size(acc, 1);
-x = x0;
+position = 0;
+velocity = 0;
+accBias  = 0;
 x_ret = zeros(N,3);
 acc_z_ret = zeros(N,1);
 
 pos_past_idx = 1;
 pos_past = zeros(1+nd_pos, 1); % ringbuffer
 
-% G = [[1, Ts*(1    - k1),   0, Ts^2*(1    - k1), k1]
-%      [0,    (1 - Ts*k2),   0, Ts  *(1 - Ts*k2), k2]
-%      [0,       - Ts*k3 , a33,       - Ts^2*k3 , k3]];
-a33 = G(3,3);
+k  = Ts/(1/(2*pi*f_cut) + Ts);
+wa = 2*pi*f_a;
+a33 = 1/(Ts*wa + 1);
+
+% Ad = [[1, Ts,  -Ts^2*a33]
+%       [0,  1,  -Ts*a33]
+%       [0,  0,  a33]];   
+% Bd = [Ts^2
+%       Ts
+%       0];
+
+% define location of discrete poles
+w1 = (k-1);
+w2 = w1;
+w3 = w1;
+% calculate observer gain
+c1 = 1 - (w1*w2 + w1*w3 + w2*w3);
+k1 = (w1 * w2 * w3) / a33 + 1;
+c2 = (c1 - k1) / (Ts*a33);
+k2 = c2 + (2 - k1)/Ts;
+k3 = (c2/a33 - ((w1 + w2 + w3)/a33 + 1)/Ts)/Ts;
 
 for i = 1:N
     
@@ -20,29 +39,38 @@ for i = 1:N
     % [cos(theta)*sin(psi), cos(phi)*cos(psi) + sin(phi)*sin(psi)*sin(theta), cos(phi)*sin(psi)*sin(theta) - cos(psi)*sin(phi)]
     % [        -sin(theta),                              cos(theta)*sin(phi),                              cos(phi)*cos(theta)]
     
-    % assume the bias affects only acc z in body frame
-    u1 = acc(i,:).';
-    u1(3) = u1(3) - a33 * x(3);
-    u1 = quat2CEB(quat(i,:)) * u1;
-    %u1(3) = u1(3) - a33 * x(3);
-    u1 = u1(3) - 9.81;
     
+    % assume the bias affects only acc z in body frame
+    acc_i = acc(i,:).';
+    acc_i(3) = acc_i(3) - a33 * accBias;
+    acc_i = quat2CEB(quat(i,:)) * acc_i;
+    acc_i = acc_i(3) - 9.81;
+    
+%     % assume the bias affects only acc z in earth frame
+%     acc_i = acc(i,:).';
+%     acc_i = quat2CEB(quat(i,:)) * acc_i;
+%     acc_i = acc_i(3) - 9.81 - a33 * accBias;
+        
     % update delayed position estimation
-    pos_past(pos_past_idx) = x(1);
+    % pos_past(pos_past_idx) = Ad(1,:) * x + Bd(1,:) * acc_i;
+    pos_past(pos_past_idx) = position + Ts*(velocity + Ts*acc_i);
     pos_past_idx = pos_past_idx + 1;
     if pos_past_idx > 1+nd_pos
         pos_past_idx = 1;
     end
-    u2 = pos(i) - pos_past(pos_past_idx);
     
-    %  x1_k  + Ts*(1    - k1) * x2_k              + Ts^2*(1    - k1) * (u1_k - a33*x3_k) + k1 * (u2_k - x1_k)
-    %             (1 - Ts*k2) * x2_k              + Ts  *(1 - Ts*k2) * (u1_k - a33*x3_k) + k2 * (u2_k - x1_k)
-    %                - Ts*k3  * x2_k + a33 * x3_k -         Ts^2*k3  * (u1_k - a33*x3_k) + k3 * (u2_k - x1_k)
-    y = G * [x; u1; u2];
-    x = y(1:3);
+    %  x = Ad * x + Bd * acc_i + K * (pos(i) - pos_past(pos_past_idx));
+    position = position + Ts*(velocity + Ts*acc_i);
+    velocity = velocity + Ts*acc_i ;
+    accBias = a33 * accBias;
     
-    x_ret(i,:) = x.';
-    acc_z_ret(i,1) = u1;
+    estimationError = pos(i) - pos_past(pos_past_idx);
+    position = position + k1 * estimationError;
+    velocity = velocity + k2 * estimationError;
+    accBias  = accBias  + k3 * estimationError;
+           
+    x_ret(i,:) = [position, velocity, accBias];
+    acc_z_ret(i,1) = acc_i;
 
 end
 

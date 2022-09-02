@@ -217,9 +217,10 @@ end
 
 %%
 
-f_cut = 0.1;
-wa = 0 * 2*pi*0.01; % this will be beneficial for horizontal position estimates (x-y)
-nd_pos = 3;         % this is somewhat a hack and can lead to a unstable filter
+f_cut = 0.10;
+f_a = 0.00;
+wa = 2*pi*f_a; % this will be beneficial for horizontal position estimates (x-y)
+nd_pos = 4;    % this is somewhat a hack and can lead to a unstable filter
 
 % choose the input and output signal, for the linear filter the bias is on acc_z in earth frame
 if do_use_baro
@@ -246,26 +247,17 @@ w1 = (k-1);
 w2 = w1;
 w3 = w1;
 % calculate observer gain
-c0 = w1*w2*w3;
 c1 = 1 - (w1*w2 + w1*w3 + w2*w3);
-k1 = c0/a33 + 1;
-k2 = (c1 - k1 + (2 - k1)*a33)/(Ts*a33);
-k3 = (c1 - k1 - ((w1 + w2 + w3) + a33)*a33)/(Ts^2*a33^2);
+k1 = (w1 * w2 * w3) / a33 + 1;
+c2 = (c1 - k1) / (Ts*a33);
+k2 = c2 + (2 - k1)/Ts;
+k3 = (c2/a33 - ((w1 + w2 + w3)/a33 + 1)/Ts)/Ts;
 K = [k1; k2; k3];
-
-% G = [[1, Ts*(1    - k1),   0, Ts^2*(1    - k1), k1]
-%      [0,    (1 - Ts*k2),   0, Ts  *(1 - Ts*k2), k2]
-%      [0,       - Ts*k3 , a33,       - Ts^2*k3 , k3]];
-a12 = Ts*(1 - k1);
-a22 = (1 - Ts*k2);
-a32 = -Ts*k3;
-G = [[1, a12,   0, Ts*a12, k1]
-     [0, a22,   0, Ts*a22, k2]
-     [0, a32, a33, Ts*a32, k3]];
 
 sys_lin = ss(Ad - K*Ad(1,:), [Bd - K*Bd(1,:), K], ...
              Ad - K*Ad(1,:), [Bd - K*Bd(1,:), K], Ts);
-
+eig(sys_lin)
+         
 % apply some betaflight filtering here
 [~, B, A] = get_filter('pt2', 6.0, Ts/3);
 acc_f = zeros(3*N, 3);
@@ -281,19 +273,14 @@ acc_f = acc_f(1:3:end,:);
 u_f   = u_f  (1:3:end,:);
          
 % this is the same like above only if nd_pos = 0
-[aa, bb, cc, dd] = dlinmod('position_estimator_G');
+[aa, bb, cc, dd] = dlinmod('position_estimator_ss');
 sys = ss(aa, bb, cc, dd, Ts);
 
-% y_est = dlsim(aa, bb, cc, dd, u);
-x0 = [0; 0; 0*9.81];
-y_est = lsim(sys, u_f, time, [x0; zeros(nd_pos, 1)]);
+y_est = lsim(sys, u_f, time);
 
-% G = [1, 0.0192646, 0, 0.000385292, 0.0367711       
-%      0, 0.999542, 0, 0.0199908, 0.022912
-%      0, 9.53674e-05, 1, 1.90735e-06, -0.00476837];
-[y_est_nl, acc_z_est] = position_estimator(G, nd_pos, x0, acc_f, u_f(:,2), quat);
+[y_est_nl, acc_z_est] = position_estimator(f_cut, f_a, Ts, nd_pos, acc_f, u_f(:,2), quat);
 format long
-G
+[K.' , a33]
 single(y_est_nl(1:10,:))
 format short
 

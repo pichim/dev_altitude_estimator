@@ -7,10 +7,11 @@ catch
   addpath fcn_bib_copy
 end
 
-Ts = 1/50;
-f_cut = 0.1;
-wa = 0 * 2*pi*0.01; % this will be beneficial for horizontal position estimates (x-y)
-nd_pos = 3;         % this is somewhat a hack and can lead to a unstable filter
+Ts = 1/120;
+f_cut = 0.10;
+f_a = 0.00;
+wa = 2*pi*f_a; % this will be beneficial for horizontal position estimates (x-y)
+nd_pos = 12;    % this is somewhat a hack and can lead to a unstable filter
 
 Gint = tf([Ts 0], [1 -1], Ts);
 
@@ -42,13 +43,15 @@ w3 = w1; % * 0.999;
 % -> k1 = 1/a33*w1*w2*w3 + 1
 % -> k2 = ((2 - k1)*a33 + 1 - w1*w2 - w1*w3 - w2*w3 - k1)/(Ts*a33)
 % -> k3 = (- a33^2 + (- w1 - w2 - w3)*a33 - k1 - w1*w2 - w1*w3 - w2*w3 + 1)/(Ts^2*a33^2)
-c0 = w1*w2*w3;
 c1 = 1 - (w1*w2 + w1*w3 + w2*w3);
-k1 = c0/a33 + 1;
-k2 = (c1 - k1 + (2 - k1)*a33)/(Ts*a33);
-k3 = (c1 - k1 - ((w1 + w2 + w3) + a33)*a33)/(Ts^2*a33^2);
+k1 = (w1 * w2 * w3) / a33 + 1;
+c2 = (c1 - k1) / (Ts*a33);
+k2 = c2 + (2 - k1)/Ts;
+k3 = (c2/a33 - ((w1 + w2 + w3)/a33 + 1)/Ts)/Ts;
+format long
 K = [k1; k2; k3]
 % K_ = place(Ad.', Ad(1,:).', [-w1, -w2, -w3]).'
+format short
 
 % % this is the observer gain for 1 real and 2 compl. conj. poles
 % % -> k1 = 1/a33*w1*w2^2 + 1
@@ -67,30 +70,11 @@ K = [k1; k2; k3]
 % K = [k1; k2; k3]
 % K_ = place(Ad.', Ad(1,:).', [-w1, -w2*D2 + 1i*w2*sqrt(1 - D2^2), -w2*D2 - 1i*w2*sqrt(1 - D2^2)]).'
 
-
-%  x1_k  + Ts*(1    - k1) * x2_k              + Ts^2*(1    - k1) * (u1_k - a33*x3_k) + k1 * (u2_k - x1_k)
-%             (1 - Ts*k2) * x2_k              + Ts  *(1 - Ts*k2) * (u1_k - a33*x3_k) + k2 * (u2_k - x1_k)
-%                - Ts*k3  * x2_k + a33 * x3_k -         Ts^2*k3  * (u1_k - a33*x3_k) + k3 * (u2_k - x1_k)
-% G = [[1, Ts*(1    - k1),   0, Ts^2*(1    - k1), k1]
-%      [0,    (1 - Ts*k2),   0, Ts  *(1 - Ts*k2), k2]
-%      [0,       - Ts*k3 , a33,       - Ts^2*k3 , k3]];
-a12 = Ts*(1 - k1);
-a22 = (1 - Ts*k2);
-a32 = -Ts*k3;
-G = [[1, a12,   0, Ts*a12, k1]
-     [0, a22,   0, Ts*a22, k2]
-     [0, a32, a33, Ts*a32, k3]];
- 
-format long
-G
-format short
-
 sys = ss(Ad - K*Ad(1,:), [Bd - K*Bd(1,:), K], ...
          Ad - K*Ad(1,:), [Bd - K*Bd(1,:), K], Ts);
-         
-% % this is the same like above only if nd_pos = 0
-% [aa, bb, cc, dd] = dlinmod('position_estimator_G');
-% sys = ss(aa, bb, cc, dd, Ts);
+
+[aa, bb, cc, dd] = dlinmod('position_estimator_ss');
+sys = ss(aa, bb, cc, dd, Ts);
 
 % they are the complementary parts (sum up to 1)
 G_inp = sys(1,1);
