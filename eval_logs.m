@@ -195,7 +195,7 @@ end
 %%
 
 % time continous model
-wa = 0*2*pi*0.01; % set this zero to get integrator for bias
+wa = 2*pi*0.05; % set this zero to get integrator for bias
 A = [[0 1 0]; [0 0 -1]; [0 0 -wa]];
 B = [0 1 0].';
 C = [1 0 0];
@@ -317,7 +317,7 @@ dpos = diff(u(:,2)) ./ diff(time); dpos = [dpos; dpos(end)];
 dlidar = diff(lidar) ./ diff(time); dlidar = [dlidar; dlidar(end)];
 
 % nd_pos corresponds to posDiscreteDelay
-nd_pos = 0;
+nd_pos = 7;
 [y_est, acc_z_est] = altitude_estimator(K, nd_pos, wa, acc, u(:,2), quat, Ts);
 format long
 single(y_est(1:10,:))
